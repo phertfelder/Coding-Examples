@@ -1,191 +1,116 @@
-const express = require("express")
-const User = require("../models/user")
-const auth = require("../middleware/auth")
-const multer = require("multer")
-const sharp = require("sharp")
-const router = new express.Router()
-const { sendWelcomeEmail, sendCancelEmail } = require("../emails/account")
+const mongoose = require("mongoose")
+const validator = require("validator")
+const bcrypt = require("bcryptjs")
+const Task = require("./task")
+const jwt = require("jsonwebtoken")
+const userSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    email: {
+      type: String,
+      unique: true,
+      required: true,
+      trim: true,
+      lowercase: true,
+      validate(value) {
+        if (!validator.isEmail(value)) {
+          throw new Error("Email is invalid")
+        }
+      },
+    },
+    age: {
+      type: Number,
+      default: 0,
 
-router.post("/users", async (req, res) => {
-  const user = new User(req.body)
-
-  try {
-    await user.save()
-    const token = await user.generateAuthToken()
-    sendWelcomeEmail(user.email, user.name)
-    res.status(201).send({ user, token })
-  } catch (e) {
-    res.status(400).send(e)
-  }
-
-  //same code below just not async
-  // user
-  //   .save()
-  //   .then(() => {
-  //     res.status(201).send(user)
-  //   })
-  //   .catch((e) => {
-  //     res.status(400).send(e)
-  //   })
-})
-
-router.post("/users/login", async (req, res) => {
-  try {
-    const user = await User.findByCredentials(req.body.email, req.body.password)
-    const token = await user.generateAuthToken()
-
-    res.send({ user, token })
-    //res.send(user)
-  } catch (e) {
-    res.status(400).send()
-  }
-})
-
-router.post("/users/logout", auth, async (req, res) => {
-  try {
-    req.user.tokens = req.user.tokens.filter((token) => {
-      return token.token !== req.token
-    })
-    await req.user.save()
-    res.send()
-  } catch (e) {
-    res.status(500).send()
-  }
-})
-
-router.post("/users/logoutAll", auth, async (req, res) => {
-  try {
-    req.user.tokens = []
-    await req.user.save()
-    res.send()
-  } catch (e) {
-    res.status(500).send()
-  }
-})
-
-router.get("/users/me", auth, async (req, res) => {
-  res.send(req.user)
-  // User.find({})
-  //   .then((users) => {
-  //     res.send(users)
-  //   })
-  //   .catch((e) => {
-  //     res.status(500).send()
-  //   })
-})
-//Get user by id from mongoose using postman JSON Data
-// router.get("/users/:id", async (req, res) => {
-//   const _id = req.params.id
-
-//   try {
-//     const user = await User.findById(_id)
-//     if (!user) {
-//       return res.status(404).send()
-//     }
-//     res.send(user)
-//   } catch (e) {
-//     res.status(500).send()
-//   }
-
-// User.findById(_id)
-//   .then((user) => {
-//     if (!user) {
-//       return res.status(404).send()
-//     }
-//     res.send(user)
-//   })
-//   .catch((e) => {
-//     res.status(500).send()
-//   })
-//})
-//fetch all users
-//Displayed JSON
-
-//Update by user id using patch http
-// must be updated by JSON
-router.patch("/users/me", auth, async (req, res) => {
-  const updates = Object.keys(req.body)
-  const allowedUpdates = ["name", "email", "password", "age"]
-  const isValidOperation = updates.every((update) =>
-    allowedUpdates.includes(update)
-  )
-  if (!isValidOperation) {
-    return res.status(400).send({ error: "Invalid updates!" })
-  }
-  try {
-    updates.forEach((update) => (req.user[update] = req.body[update]))
-
-    await req.user.save()
-
-    //const user = await User.findByIdAndUpdate(req.params.id, req.body, {
-    //   new: true,
-    //   runValidators: true,
-    // })
-    res.send(req.user)
-  } catch (e) {
-    res.status(400).send(e)
-  }
-})
-
-//delete user
-router.delete("/users/me", auth, async (req, res) => {
-  try {
-    await req.user.remove()
-    sendCancelEmail(req.user.email, req.user.name)
-    res.send(req.user)
-  } catch (e) {
-    res.status(500).send()
-  }
-})
-
-const upload = multer({
-  limits: {
-    fileSize: 1000000,
+      validate(value) {
+        if (value < 0) {
+          throw new Error("Please enter a correct age.")
+        }
+      },
+    },
+    password: {
+      type: String,
+      trim: true,
+      minlength: 7,
+      validate(value) {
+        //isStrongPassword(str [, options])
+        if (value.toLowerCase().includes("password")) {
+          throw new Error("Password cannot be password")
+        }
+      },
+    },
+    tokens: [
+      {
+        token: {
+          type: String,
+          required: true,
+        },
+      },
+    ],
+    avatar: {
+      type: Buffer,
+    },
   },
-  fileFilter(req, file, cb) {
-    if (!file.originalname.match(/\.(jpg|jpeg|png)$/)) {
-      return cb(
-        new Error("Please upload an image in either jpg, jpeg or png format")
-      )
-    }
-    cb(undefined, true)
-  },
-})
-router.post(
-  "/users/me/avatar",
-  auth,
-  upload.single("avatar"),
-  async (req, res) => {
-    const buffer = await sharp(req.file.buffer)
-      .resize({ width: 250, height: 250 })
-      .png()
-      .toBuffer()
-    req.user.avatar = buffer
-    await req.user.save()
-    res.send()
-  },
-  (error, req, res, next) => {
-    res.status(400).send({ error: error.message })
+  {
+    timestamps: true,
   }
 )
-//Delete avatar from database
-router.delete("/users/me/avatar", auth, async (req, res) => {
-  req.user.avatar = undefined
-  await req.user.save()
-  res.send()
+
+userSchema.virtual("tasks", {
+  ref: "Task",
+  localField: "_id",
+  foreignField: "owner",
 })
 
-router.get("/users/:id/avatar", async (req, res) => {
-  try {
-    const user = await User.findById(req.params.id)
+userSchema.methods.toJSON = function () {
+  const user = this
+  const userObject = user.toObject()
+  delete userObject.password
+  delete userObject.tokens
+  delete userObject.avatar
+  return userObject
+}
+userSchema.methods.generateAuthToken = async function () {
+  const user = this
+  const token = jwt.sign({ _id: user.id.toString() }, "thisismynewcourse")
 
-    if (!user || !user.avatar) {
-      throw new Error()
-    }
-    res.set("Content-Type", "image/png")
-    res.send(user.avatar)
-  } catch (e) {
-    res.status(404).send()
+  user.tokens = user.tokens.concat({ token })
+  await user.save()
+  return token
+}
+userSchema.statics.findByCredentials = async (email, password) => {
+  const user = await User.findOne({ email })
+  if (!user) {
+    throw new Error("Unable to login")
   }
+
+  const isMatch = await bcrypt.compare(password, user.password)
+  if (!isMatch) {
+    throw new Error("Unable to login")
+  }
+  return user
+}
+
+//Hash the plain text password
+userSchema.pre("save", async function (next) {
+  const user = this
+
+  if (user.isModified("password")) {
+    user.password = await bcrypt.hash(user.password, 8)
+  }
+
+  next()
 })
-module.exports = router
+//Delete user tasks when user is removed.
+userSchema.pre("remove", async function (next) {
+  const user = this
+  await Task.deleteMany({ owner: user._id })
+  next()
+})
+const User = mongoose.model("User", userSchema)
+
+module.exports = User
